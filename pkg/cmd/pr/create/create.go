@@ -259,7 +259,13 @@ func createRun(opts *CreateOptions) (err error) {
 	}
 
 	if action == shared.MetadataAction {
-		err = shared.MetadataSurvey(opts.IO, client, ctx.BaseRepo, state)
+		fetcher := &shared.MetadataFetcher{
+			IO:        opts.IO,
+			APIClient: client,
+			Repo:      ctx.BaseRepo,
+			State:     state,
+		}
+		err = shared.MetadataSurvey(opts.IO, ctx.BaseRepo, fetcher, state)
 		if err != nil {
 			return
 		}
@@ -380,7 +386,7 @@ func NewIssueState(ctx CreateContext, opts CreateOptions) (*shared.IssueMetadata
 
 	if opts.Autofill || !opts.TitleProvided || !opts.BodyProvided {
 		err := initDefaultTitleBody(ctx, state)
-		if err != nil {
+		if err != nil && opts.Autofill {
 			return nil, fmt.Errorf("could not compute title or body defaults: %w", err)
 		}
 	}
@@ -684,7 +690,7 @@ func generateCompareURL(ctx CreateContext, state shared.IssueMetadataState) (str
 	u := ghrepo.GenerateRepoURL(
 		ctx.BaseRepo,
 		"compare/%s...%s?expand=1",
-		url.QueryEscape(ctx.BaseBranch), url.QueryEscape(ctx.HeadBranch))
+		url.QueryEscape(ctx.BaseBranch), url.QueryEscape(ctx.HeadBranchLabel))
 	url, err := shared.WithPrAndIssueQueryParams(u, state)
 	if err != nil {
 		return "", err
