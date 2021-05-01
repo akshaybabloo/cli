@@ -76,7 +76,7 @@ func closeRun(opts *CloseOptions) error {
 	if pr.State == "MERGED" {
 		fmt.Fprintf(opts.IO.ErrOut, "%s Pull request #%d (%s) can't be closed because it was already merged", cs.Red("!"), pr.Number, pr.Title)
 		return cmdutil.SilentError
-	} else if pr.Closed {
+	} else if !pr.IsOpen() {
 		fmt.Fprintf(opts.IO.ErrOut, "%s Pull request #%d (%s) is already closed\n", cs.Yellow("!"), pr.Number, pr.Title)
 		return nil
 	}
@@ -86,7 +86,7 @@ func closeRun(opts *CloseOptions) error {
 		return fmt.Errorf("API call failed: %w", err)
 	}
 
-	fmt.Fprintf(opts.IO.ErrOut, "%s Closed pull request #%d (%s)\n", cs.Red("✔"), pr.Number, pr.Title)
+	fmt.Fprintf(opts.IO.ErrOut, "%s Closed pull request #%d (%s)\n", cs.SuccessIconWithColor(cs.Red), pr.Number, pr.Title)
 
 	crossRepoPR := pr.HeadRepositoryOwner.Login != baseRepo.RepoOwner()
 
@@ -132,7 +132,7 @@ func closeRun(opts *CloseOptions) error {
 				return err
 			}
 		}
-		fmt.Fprintf(opts.IO.ErrOut, "%s Deleted branch %s%s\n", cs.Red("✔"), cs.Cyan(pr.HeadRefName), branchSwitchString)
+		fmt.Fprintf(opts.IO.ErrOut, "%s Deleted branch %s%s\n", cs.SuccessIconWithColor(cs.Red), cs.Cyan(pr.HeadRefName), branchSwitchString)
 	}
 
 	return nil

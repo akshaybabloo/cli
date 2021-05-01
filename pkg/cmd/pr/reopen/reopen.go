@@ -70,7 +70,7 @@ func reopenRun(opts *ReopenOptions) error {
 		return cmdutil.SilentError
 	}
 
-	if !pr.Closed {
+	if pr.IsOpen() {
 		fmt.Fprintf(opts.IO.ErrOut, "%s Pull request #%d (%s) is already open\n", cs.Yellow("!"), pr.Number, pr.Title)
 		return nil
 	}
@@ -80,7 +80,7 @@ func reopenRun(opts *ReopenOptions) error {
 		return fmt.Errorf("API call failed: %w", err)
 	}
 
-	fmt.Fprintf(opts.IO.ErrOut, "%s Reopened pull request #%d (%s)\n", cs.SuccessIcon(), pr.Number, pr.Title)
+	fmt.Fprintf(opts.IO.ErrOut, "%s Reopened pull request #%d (%s)\n", cs.SuccessIconWithColor(cs.Green), pr.Number, pr.Title)
 
 	return nil
 }

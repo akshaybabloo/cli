@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -32,6 +31,10 @@ type Repository struct {
 	DefaultBranchRef BranchRef
 
 	Parent *Repository
+
+	MergeCommitAllowed bool
+	RebaseMergeAllowed bool
+	SquashMergeAllowed bool
 
 	// pseudo-field that keeps track of host name of this repo
 	hostname string
@@ -108,6 +111,9 @@ func GitHubRepo(client *Client, repo ghrepo.Interface) (*Repository, error) {
 			parent {
 				...repo
 			}
+			mergeCommitAllowed
+			rebaseMergeAllowed
+			squashMergeAllowed
 		}
 	}`
 	variables := map[string]interface{}{
@@ -457,13 +463,40 @@ func (m *RepoMetadataResult) ProjectsToIDs(names []string) ([]string, error) {
 	return ids, nil
 }
 
+func ProjectsToPaths(projects []RepoProject, names []string) ([]string, error) {
+	var paths []string
+	for _, projectName := range names {
+		found := false
+		for _, p := range projects {
+			if strings.EqualFold(projectName, p.Name) {
+				// format of ResourcePath: /OWNER/REPO/projects/PROJECT_NUMBER or /orgs/ORG/projects/PROJECT_NUMBER
+				// required format of path: OWNER/REPO/PROJECT_NUMBER or ORG/PROJECT_NUMBER
+				var path string
+				pathParts := strings.Split(p.ResourcePath, "/")
+				if pathParts[1] == "orgs" {
+					path = fmt.Sprintf("%s/%s", pathParts[2], pathParts[4])
+				} else {
+					path = fmt.Sprintf("%s/%s/%s", pathParts[1], pathParts[2], pathParts[4])
+				}
+				paths = append(paths, path)
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, fmt.Errorf("'%s' not found", projectName)
+		}
+	}
+	return paths, nil
+}
+
 func (m *RepoMetadataResult) MilestoneToID(title string) (string, error) {
 	for _, m := range m.Milestones {
 		if strings.EqualFold(title, m.Title) {
 			return m.ID, nil
 		}
 	}
-	return "", errors.New("not found")
+	return "", fmt.Errorf("'%s' not found", title)
 }
 
 func (m *RepoMetadataResult) Merge(m2 *RepoMetadataResult) {
@@ -540,20 +573,12 @@ func RepoMetadata(client *Client, repo ghrepo.Interface, input RepoMetadataInput
 	if input.Projects {
 		count++
 		go func() {
-			projects, err := RepoProjects(client, repo)
+			projects, err := RepoAndOrgProjects(client, repo)
 			if err != nil {
-				errc <- fmt.Errorf("error fetching projects: %w", err)
+				errc <- err
 				return
 			}
 			result.Projects = projects
-
-			orgProjects, err := OrganizationProjects(client, repo)
-			// TODO: better detection of non-org repos
-			if err != nil && !strings.HasPrefix(err.Error(), "Could not resolve to an Organization") {
-				errc <- fmt.Errorf("error fetching organization projects: %w", err)
-				return
-			}
-			result.Projects = append(result.Projects, orgProjects...)
 			errc <- nil
 		}()
 	}
@@ -682,8 +707,9 @@ func RepoResolveMetadataIDs(client *Client, repo ghrepo.Interface, input RepoRes
 }
 
 type RepoProject struct {
-	ID   string
-	Name string
+	ID           string
+	Name         string
+	ResourcePath string
 }
 
 // RepoProjects fetches all open projects for a repository
@@ -722,6 +748,23 @@ func RepoProjects(client *Client, repo ghrepo.Interface) ([]RepoProject, error) 
 		}
 		variables["endCursor"] = githubv4.String(query.Repository.Projects.PageInfo.EndCursor)
 	}
+
+	return projects, nil
+}
+
+// RepoAndOrgProjects fetches all open projects for a repository and its org
+func RepoAndOrgProjects(client *Client, repo ghrepo.Interface) ([]RepoProject, error) {
+	projects, err := RepoProjects(client, repo)
+	if err != nil {
+		return projects, fmt.Errorf("error fetching projects: %w", err)
+	}
+
+	orgProjects, err := OrganizationProjects(client, repo)
+	// TODO: better detection of non-org repos
+	if err != nil && !strings.HasPrefix(err.Error(), "Could not resolve to an Organization") {
+		return projects, fmt.Errorf("error fetching organization projects: %w", err)
+	}
+	projects = append(projects, orgProjects...)
 
 	return projects, nil
 }
@@ -912,4 +955,13 @@ func MilestoneByNumber(client *Client, repo ghrepo.Interface, number int32) (*Re
 	}
 
 	return query.Repository.Milestone, nil
+}
+
+func ProjectNamesToPaths(client *Client, repo ghrepo.Interface, projectNames []string) ([]string, error) {
+	var paths []string
+	projects, err := RepoAndOrgProjects(client, repo)
+	if err != nil {
+		return paths, err
+	}
+	return ProjectsToPaths(projects, projectNames)
 }
