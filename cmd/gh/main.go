@@ -21,6 +21,7 @@ import (
 	"github.com/cli/cli/internal/run"
 	"github.com/cli/cli/internal/update"
 	"github.com/cli/cli/pkg/cmd/alias/expand"
+	"github.com/cli/cli/pkg/cmd/extensions"
 	"github.com/cli/cli/pkg/cmd/factory"
 	"github.com/cli/cli/pkg/cmd/root"
 	"github.com/cli/cli/pkg/cmdutil"
@@ -92,14 +93,6 @@ func mainRun() exitCode {
 		return exitError
 	}
 
-	if prompt, _ := cfg.Get("", "prompt"); prompt == "disabled" {
-		cmdFactory.IOStreams.SetNeverPrompt(true)
-	}
-
-	if pager, _ := cfg.Get("", "pager"); pager != "" {
-		cmdFactory.IOStreams.SetPager(pager)
-	}
-
 	// TODO: remove after FromFullName has been revisited
 	if host, err := cfg.DefaultHost(); err == nil {
 		ghrepo.SetDefaultHost(host)
@@ -140,25 +133,43 @@ func mainRun() exitCode {
 
 			err = preparedCmd.Run()
 			if err != nil {
-				if ee, ok := err.(*exec.ExitError); ok {
-					return exitCode(ee.ExitCode())
+				var execError *exec.ExitError
+				if errors.As(err, &execError) {
+					return exitCode(execError.ExitCode())
 				}
-
 				fmt.Fprintf(stderr, "failed to run external command: %s", err)
 				return exitError
 			}
 
 			return exitOK
+		} else if c, _, err := rootCmd.Traverse(expandedArgs); err == nil && c == rootCmd && len(expandedArgs) > 0 {
+			extensionManager := extensions.NewManager()
+			if found, err := extensionManager.Dispatch(expandedArgs, os.Stdin, os.Stdout, os.Stderr); err != nil {
+				var execError *exec.ExitError
+				if errors.As(err, &execError) {
+					return exitCode(execError.ExitCode())
+				}
+				fmt.Fprintf(stderr, "failed to run extension: %s", err)
+				return exitError
+			} else if found {
+				return exitOK
+			}
 		}
 	}
 
 	cs := cmdFactory.IOStreams.ColorScheme()
 
-	if cmd != nil && cmdutil.IsAuthCheckEnabled(cmd) && !cmdutil.CheckAuth(cfg) {
-		fmt.Fprintln(stderr, cs.Bold("Welcome to GitHub CLI!"))
-		fmt.Fprintln(stderr)
-		fmt.Fprintln(stderr, "To authenticate, please run `gh auth login`.")
-		return exitAuth
+	authError := errors.New("authError")
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		// require that the user is authenticated before running most commands
+		if cmdutil.IsAuthCheckEnabled(cmd) && !cmdutil.CheckAuth(cfg) {
+			fmt.Fprintln(stderr, cs.Bold("Welcome to GitHub CLI!"))
+			fmt.Fprintln(stderr)
+			fmt.Fprintln(stderr, "To authenticate, please run `gh auth login`.")
+			return authError
+		}
+
+		return nil
 	}
 
 	rootCmd.SetArgs(expandedArgs)
@@ -172,6 +183,8 @@ func mainRun() exitCode {
 				fmt.Fprint(stderr, "\n")
 			}
 			return exitCancel
+		} else if errors.Is(err, authError) {
+			return exitAuth
 		}
 
 		printError(stderr, err, cmd, hasDebug)
@@ -264,7 +277,7 @@ func checkForUpdate(currentVersion string) (*update.ReleaseInfo, error) {
 	}
 
 	repo := updaterEnabled
-	stateFilePath := filepath.Join(config.ConfigDir(), "state.yml")
+	stateFilePath := filepath.Join(config.StateDir(), "state.yml")
 	return update.CheckForUpdate(client, stateFilePath, repo, currentVersion)
 }
 
